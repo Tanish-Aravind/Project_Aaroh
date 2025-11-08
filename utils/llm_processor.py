@@ -1,76 +1,102 @@
-# Aaroh_project/utils/llm_processor.py
 from google import genai
 from pydantic import BaseModel, Field
 from typing import List
 import os
 
-# --- Pydantic Schemas for Structured Output ---
+# --- Pydantic Schemas for Structured Output (3 Classes) ---
+
+class SimplifiedOutput(BaseModel):
+    """Schema for the first generation step: ELI5 explanation and analogy."""
+    simplified_text: str = Field(description="The topic explained using simple, accessible language for a five-year-old.")
+    analogy: str = Field(description="A single, highly memorable, real-world analogy for a child.")
 
 class QuizItem(BaseModel):
-    """Defines the schema for a single quiz question."""
-    question: str = Field(description="A clear comprehension question based on the input text.")
-    type: str = Field(description="The question format, must be 'multiple_choice' or 'short_answer'.")
-    correct_answer: str = Field(description="The correct answer to the question.")
+    """Schema for a single quiz question, now focused on MCQ."""
+    question: str = Field(description="A comprehension question based on the simplified text.")
+    # We remove 'type' because it's now always multiple_choice
+    correct_answer: str = Field(description="The correct answer from the list of options.")
+    options: List[str] = Field(description="A list of 4 possible answers for a multiple-choice question.")
 
-class AarohOutput(BaseModel):
-    """The final structured output containing all required learning aids."""
-    simplified_text: str = Field(description="The complex text rewritten using simple, accessible language for a high school student.")
-    analogy: str = Field(description="A single, highly memorable, real-world analogy to make the core concept 'sticky'.")
-    quiz_questions: List[QuizItem] = Field(description="A list of exactly 3 high-quality quiz questions.")
+class QuizOutput(BaseModel):
+    """Schema for the second generation step: The quiz."""
+    quiz_questions: List[QuizItem] = Field(description="A list of exactly 3 high-quality multiple-choice questions.")
 
+# --- LLM Helper Functions (Step 1 and 2) ---
 
-# --- LLM Processing Function ---
-
-def get_aaroh_output(complex_text):
-    """
-    Calls the Gemini API to perform the three core tasks in one structured response.
-    """
-    # The client automatically picks up the GEMINI_API_KEY from the environment
-    try:
-        client = genai.Client()
-    except Exception as e:
-        # Handle case where key is missing or invalid
-        return f"Initialization Error: Could not connect to Gemini API. Check your GEMINI_API_KEY. Details: {e}", False
-
-
-    # 1. Craft the Prompt (The Project Aaroh persona)
-    # Aaroh_project/utils/llm_processor.py (within the get_aaroh_output function)
-
-# --- REWRITE THIS SECTION ---
+def generate_simplification(client, complex_text):
+    """Generates the ELI5 text and analogy (Step 1)."""
     system_prompt = (
-        "You are Project Aaroh, a friendly and extremely patient teacher. "
-        "Your mission is to explain complex topics and phrases in a way that a five-year-old child "
-        "can easily and instantly understand. Use simple words, short sentences, and common, "
-        "everyday examples (like toys, food, or pets). Avoid all technical jargon. "
-        "Your output must still be in the requested JSON structure: "
-        "1. **Simple Explanation:** The ELI5 explanation for the topic."
-        "2. **Analogy:** A single, perfect, and easy-to-visualize analogy for a child."
-        "3. **Quiz:** Three simple questions a five-year-old could answer to check understanding."
-        "Ensure the output strictly adheres to the provided JSON Schema."
+        "You are Project Aaroh, a friendly teacher. Your goal is to explain the user's input "
+        "topic/phrase using simple words, short sentences, and everyday examples (ELI5 style). "
+        "Your output MUST be a JSON object with a simplified explanation and a single, related analogy."
     )
-# --- END REWRITE ---
-
-
-    # 2. Configure the API call for structured output
     config = genai.types.GenerateContentConfig(
         system_instruction=system_prompt,
         response_mime_type="application/json",
-        response_schema=AarohOutput, # Enforce the Pydantic schema
-        temperature=0.4 # Lower temperature favors accuracy over extreme creativity
+        response_schema=SimplifiedOutput,
+        temperature=0.4
     )
-    
-    # 3. Call the model
-    try:
-        response = client.models.generate_content(
-            model='gemini-2.5-flash', # A great model for fast, structured text tasks
-            contents=[complex_text],
-            config=config,
-        )
 
-        # 4. Parse the guaranteed JSON response into the Pydantic model
-        # The response.text is a JSON string adhering to the AarohOutput schema
-        return AarohOutput.model_validate_json(response.text).model_dump(), True
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=[complex_text],
+        config=config,
+    )
+    # Returns a SimplifiedOutput Pydantic object
+    return SimplifiedOutput.model_validate_json(response.text)
+
+
+# Aaroh_project/utils/llm_processor.py
+
+# ... (after generate_simplification function)
+
+def generate_quiz(client, simplified_text):
+    """Generates 3 multiple-choice quiz questions based on the simplified_text context."""
+    quiz_prompt = (
+        f"Based ONLY on the simplified explanation provided below, generate exactly 3 **multiple-choice questions (MCQs)**. "
+        f"Each question must have **4 options** and be simple enough for a five-year-old child to answer, testing the ELI5 concept. "
+        f"Ensure the output strictly adheres to the QuizOutput JSON Schema. \n\n"
+        f"Simplified Text for Quiz Context: \n---\n{simplified_text}"
+    )
+
+    config = genai.types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=QuizOutput,
+        temperature=0.1
+    )
+
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=[quiz_prompt],
+        config=config,
+    )
+    return QuizOutput.model_validate_json(response.text)
+
+def get_aaroh_output(complex_text):
+    """Orchestrates the two-step prompt chain and correctly converts output to dicts."""
+    try:
+        # Client initialization will automatically pick up the GEMINI_API_KEY
+        client = genai.Client()
+        
+        # 1. GENERATE SIMPLIFICATION (Step 1)
+        step1_result = generate_simplification(client, complex_text)
+        
+        # 2. GENERATE QUIZ (Step 2)
+        step2_result = generate_quiz(client, step1_result.simplified_text)
+        
+        # 3. COMBINE RESULTS (The essential FIX)
+        final_output = {
+            # Convert Step 1 Pydantic object fields directly to dictionary values
+            "simplified_text": step1_result.simplified_text,
+            "analogy": step1_result.analogy,
+            
+            # FIX: Use .model_dump() on the QuizOutput object to convert the
+            # list of QuizItem objects into JSON-serializable dictionaries.
+            "quiz_questions": step2_result.model_dump()["quiz_questions"]
+        }
+        
+        return final_output, True
 
     except Exception as e:
-        # Catch any errors during the API call or parsing
-        return f"LLM Processing Error: Failed to generate content. Details: {e}", False
+        # A simple string error message for Flask to return
+        return f"LLM Processing Error: Failed to complete chain. Details: {e}", False

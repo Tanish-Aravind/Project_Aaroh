@@ -1,0 +1,4 @@
+pydantic 
+genai 
+list
+flask 

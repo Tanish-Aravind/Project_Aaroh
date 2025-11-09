@@ -1,4 +1,4 @@
-pydantic 
-genai 
-list
-flask 
+Flask
+python-dotenv
+google-genai
+pydantic

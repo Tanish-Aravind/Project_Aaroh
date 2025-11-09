@@ -36,5 +36,5 @@ def simplify_text_endpoint():
 
 # --- Run the Server ---
 if __name__ == '__main__':
-    # You must run this using `python app.py` while your (venv) is active
+    # You must run this using `python app.py` while your (venv) is activeq
     app.run(debug=True)
